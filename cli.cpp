@@ -2,6 +2,7 @@
 #include <string>
 #include <filesystem>
 #include <chrono>
+#include "crypto.h"  // ADDED: Include the crypto header
 
 #ifdef _WIN32
     #include <conio.h>
@@ -11,9 +12,6 @@
 #endif
 
 namespace fs = std::filesystem;
-
-// Forward declaration 
-class CryptographyEngine;
 
 // ============================================================================
 // SECURE PASSWORD INPUT (Platform-specific)
@@ -113,7 +111,8 @@ bool encryptCommand(const std::string& inputFile, const std::string& outputFile)
     std::cout << "\n[*] Encrypting file..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    if (!CryptographyEngine::encryptFile(inputFile, outputFile, password)) {
+    // FIXED: Changed CryptographyEngine::encryptFile to crypto::encrypt_file
+    if (!crypto::encrypt_file(inputFile, outputFile, password)) {
         std::cerr << "Encryption failed" << std::endl;
         return false;
     }
@@ -154,7 +153,8 @@ bool decryptCommand(const std::string& inputFile, const std::string& outputFile)
     std::cout << "\n[*] Decrypting file..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    if (!CryptographyEngine::decryptFile(inputFile, outputFile, password)) {
+    // FIXED: Changed CryptographyEngine::decryptFile to crypto::decrypt_file
+    if (!crypto::decrypt_file(inputFile, outputFile, password)) {
         std::cerr << "Decryption failed" << std::endl;
         return false;
     }
@@ -196,14 +196,16 @@ bool testCommand() {
     std::cout << "  [*] Created test file (text)" << std::endl;
 
     // Encrypt
-    if (!CryptographyEngine::encryptFile("test_text.txt", "test_text.txt.enc", testPassword)) {
+    // FIXED: Changed CryptographyEngine::encryptFile to crypto::encrypt_file
+    if (!crypto::encrypt_file("test_text.txt", "test_text.txt.enc", testPassword)) {
         std::cerr << "  [!] Encryption failed" << std::endl;
         return false;
     }
     std::cout << "  [+] Encryption successful" << std::endl;
 
     // Decrypt
-    if (!CryptographyEngine::decryptFile("test_text.txt.enc", "test_text.txt.dec", testPassword)) {
+    // FIXED: Changed CryptographyEngine::decryptFile to crypto::decrypt_file
+    if (!crypto::decrypt_file("test_text.txt.enc", "test_text.txt.dec", testPassword)) {
         std::cerr << "  [!] Decryption failed" << std::endl;
         return false;
     }
@@ -230,13 +232,15 @@ bool testCommand() {
     binaryFile.close();
     std::cout << "  [*] Created test file (binary)" << std::endl;
 
-    if (!CryptographyEngine::encryptFile("test_binary.bin", "test_binary.bin.enc", testPassword)) {
+    // FIXED: Changed CryptographyEngine::encryptFile to crypto::encrypt_file
+    if (!crypto::encrypt_file("test_binary.bin", "test_binary.bin.enc", testPassword)) {
         std::cerr << "  [!] Encryption failed" << std::endl;
         return false;
     }
     std::cout << "  [+] Encryption successful" << std::endl;
 
-    if (!CryptographyEngine::decryptFile("test_binary.bin.enc", "test_binary.bin.dec", testPassword)) {
+    // FIXED: Changed CryptographyEngine::decryptFile to crypto::decrypt_file
+    if (!crypto::decrypt_file("test_binary.bin.enc", "test_binary.bin.dec", testPassword)) {
         std::cerr << "  [!] Decryption failed" << std::endl;
         return false;
     }
@@ -244,7 +248,8 @@ bool testCommand() {
 
     // Test 3: Wrong password detection
     std::cout << "\n[Test 3] Wrong Password Detection" << std::endl;
-    if (CryptographyEngine::decryptFile("test_text.txt.enc", "wrong_output.txt", "WrongPassword123")) {
+    // FIXED: Changed CryptographyEngine::decryptFile to crypto::decrypt_file
+    if (crypto::decrypt_file("test_text.txt.enc", "wrong_output.txt", "WrongPassword123")) {
         std::cerr << "  [!] Should have rejected wrong password" << std::endl;
         return false;
     }
