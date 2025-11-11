@@ -107,6 +107,9 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
         handle_openssl_errors();
+        // FIXED: Added plaintext cleanup
+        secure_zero(plaintext.data(), plaintext.size());
+        secure_zero(key.data(), key.size());
         return false;
     }
 
@@ -115,6 +118,9 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
     if (RAND_bytes(iv.data(), iv.size()) != 1) {
         handle_openssl_errors();
         EVP_CIPHER_CTX_free(ctx);
+        // FIXED: Added plaintext cleanup
+        secure_zero(plaintext.data(), plaintext.size());
+        secure_zero(key.data(), key.size());
         return false;
     }
 
@@ -122,18 +128,27 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
     if (1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL)) {
         EVP_CIPHER_CTX_free(ctx);
         handle_openssl_errors();
+        // FIXED: Added plaintext cleanup
+        secure_zero(plaintext.data(), plaintext.size());
+        secure_zero(key.data(), key.size());
         return false;
     }
     // 2. Set IV length.
     if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, iv.size(), NULL)) {
         EVP_CIPHER_CTX_free(ctx);
         handle_openssl_errors();
+        // FIXED: Added plaintext cleanup
+        secure_zero(plaintext.data(), plaintext.size());
+        secure_zero(key.data(), key.size());
         return false;
     }
     // 3. Provide key and IV.
     if (1 != EVP_EncryptInit_ex(ctx, NULL, NULL, key.data(), iv.data())) {
         EVP_CIPHER_CTX_free(ctx);
         handle_openssl_errors();
+        // FIXED: Added plaintext cleanup
+        secure_zero(plaintext.data(), plaintext.size());
+        secure_zero(key.data(), key.size());
         return false;
     }
 
@@ -144,6 +159,9 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
     if (1 != EVP_EncryptUpdate(ctx, ciphertext.data(), &len, plaintext.data(), plaintext.size())) {
         EVP_CIPHER_CTX_free(ctx);
         handle_openssl_errors();
+        // FIXED: Added plaintext cleanup
+        secure_zero(plaintext.data(), plaintext.size());
+        secure_zero(key.data(), key.size());
         return false;
     }
     int ciphertext_len = len;
@@ -152,6 +170,9 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
     if (1 != EVP_EncryptFinal_ex(ctx, ciphertext.data() + len, &len)) {
         EVP_CIPHER_CTX_free(ctx);
         handle_openssl_errors();
+        // FIXED: Added plaintext cleanup
+        secure_zero(plaintext.data(), plaintext.size());
+        secure_zero(key.data(), key.size());
         return false;
     }
     ciphertext_len += len;
@@ -162,6 +183,9 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
     if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, tag.size(), tag.data())) {
         EVP_CIPHER_CTX_free(ctx);
         handle_openssl_errors();
+        // FIXED: Added plaintext cleanup
+        secure_zero(plaintext.data(), plaintext.size());
+        secure_zero(key.data(), key.size());
         return false;
     }
 
@@ -175,7 +199,8 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
     output_data.insert(output_data.end(), tag.begin(), tag.end());
     output_data.insert(output_data.end(), ciphertext.begin(), ciphertext.end());
     
-    // After encryption is complete
+    // FIXED: Added plaintext cleanup before finishing
+    secure_zero(plaintext.data(), plaintext.size());
     secure_zero(key.data(), key.size());
     secure_zero(salt.data(), salt.size());
     
@@ -218,6 +243,7 @@ bool crypto::decrypt_file(const std::string& input_path, const std::string& outp
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
         handle_openssl_errors();
+        secure_zero(key.data(), key.size());
         return false;
     }
 
@@ -225,18 +251,21 @@ bool crypto::decrypt_file(const std::string& input_path, const std::string& outp
     if (1 != EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL)) {
         EVP_CIPHER_CTX_free(ctx);
         handle_openssl_errors();
+        secure_zero(key.data(), key.size());
         return false;
     }
     // 3. Set IV length.
     if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, iv.size(), NULL)) {
         EVP_CIPHER_CTX_free(ctx);
         handle_openssl_errors();
+        secure_zero(key.data(), key.size());
         return false;
     }
     // 4. Provide key and IV.
     if (1 != EVP_DecryptInit_ex(ctx, NULL, NULL, key.data(), iv.data())) {
         EVP_CIPHER_CTX_free(ctx);
         handle_openssl_errors();
+        secure_zero(key.data(), key.size());
         return false;
     }
 
@@ -246,6 +275,7 @@ bool crypto::decrypt_file(const std::string& input_path, const std::string& outp
     if (1 != EVP_DecryptUpdate(ctx, plaintext.data(), &len, ciphertext.data(), ciphertext.size())) {
         EVP_CIPHER_CTX_free(ctx);
         handle_openssl_errors();
+        secure_zero(key.data(), key.size());
         return false;
     }
     int plaintext_len = len;
@@ -254,6 +284,8 @@ bool crypto::decrypt_file(const std::string& input_path, const std::string& outp
     if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, tag.size(), tag.data())) {
         EVP_CIPHER_CTX_free(ctx);
         handle_openssl_errors();
+        secure_zero(plaintext.data(), plaintext.size());
+        secure_zero(key.data(), key.size());
         return false;
     }
 
