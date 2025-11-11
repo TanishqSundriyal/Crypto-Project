@@ -8,7 +8,7 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 app = ctk.CTk()
-app.title("🔐 Secure File Encryption & Decryption Tool")
+app.title("🔒 Secure File Encryption & Decryption Tool")
 app.geometry("720x500")
 
 # Generate encryption key using password
@@ -61,7 +61,19 @@ def decrypt_file():
             encrypted_data = enc_file.read()
         decrypted = fernet.decrypt(encrypted_data)
 
-        out_path = file_path.replace(".enc", "_decrypted.txt")
+        # FIXED: Proper output file naming that preserves original extension
+        if file_path.endswith(".enc"):
+            # Remove .enc extension to get original filename
+            out_path = file_path[:-4]
+            # If file already exists, add "_decrypted" before extension
+            if os.path.exists(out_path):
+                base_name, ext = os.path.splitext(out_path)
+                out_path = f"{base_name}_decrypted{ext}"
+        else:
+            # If file doesn't end with .enc, just add _decrypted
+            base_name, ext = os.path.splitext(file_path)
+            out_path = f"{base_name}_decrypted{ext}"
+        
         with open(out_path, "wb") as dec_file:
             dec_file.write(decrypted)
 
@@ -79,7 +91,7 @@ def browse_file():
 # -------------------- UI Layout --------------------
 
 # Title Label
-title = ctk.CTkLabel(app, text="🔐 Secure File Encryption & Decryption Tool", 
+title = ctk.CTkLabel(app, text="🔒 Secure File Encryption & Decryption Tool", 
                      font=("Segoe UI", 24, "bold"), text_color="#00b4d8")
 title.pack(pady=30)
 
