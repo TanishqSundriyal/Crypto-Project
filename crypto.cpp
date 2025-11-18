@@ -1,6 +1,7 @@
 #include "crypto.h"
 #include <fstream>
-#include <iostream> // For error reporting
+#include <iostream>
+#include <cctype>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/err.h>
@@ -26,10 +27,10 @@ byte_vec read_file(const std::string& path) {
     std::streamsize size = file.tellg();
     file.seekg(0, std::ios::beg);
     byte_vec buffer(size);
-    if (file.read(reinterpret_cast<char*>(buffer.data()), size)) {
+    if (size > 0 && file.read(reinterpret_cast<char*>(buffer.data()), size)) {
         return buffer;
     }
-    return {};
+    return buffer; // Return empty buffer for empty files
 }
 
 // Helper function to write a byte vector to a file.
@@ -37,7 +38,7 @@ bool write_file(const std::string& path, const byte_vec& data) {
     std::ofstream file(path, std::ios::binary);
     if (!file) return false;
     file.write(reinterpret_cast<const char*>(data.data()), data.size());
-    return true;
+    return file.good();
 }
 
 namespace {
@@ -58,6 +59,72 @@ namespace {
     void secure_zero(void* ptr, size_t size) {
         OPENSSL_cleanse(ptr, size);
     }
+
+    // RAII wrapper for EVP_CIPHER_CTX
+    class CipherContext {
+    private:
+        EVP_CIPHER_CTX* ctx;
+    public:
+        CipherContext() : ctx(EVP_CIPHER_CTX_new()) {}
+        ~CipherContext() { 
+            if (ctx) EVP_CIPHER_CTX_free(ctx); 
+        }
+        EVP_CIPHER_CTX* get() { return ctx; }
+        operator bool() const { return ctx != nullptr; }
+        // Prevent copying
+        CipherContext(const CipherContext&) = delete;
+        CipherContext& operator=(const CipherContext&) = delete;
+    };
+
+    // RAII wrapper for secure data
+    class SecureBuffer {
+    private:
+        byte_vec data;
+    public:
+        SecureBuffer() = default;
+        explicit SecureBuffer(size_t size) : data(size) {}
+        SecureBuffer(byte_vec&& vec) : data(std::move(vec)) {}
+        ~SecureBuffer() {
+            if (!data.empty()) {
+                secure_zero(data.data(), data.size());
+            }
+        }
+        byte_vec& get() { return data; }
+        const byte_vec& get() const { return data; }
+        // Move only
+        SecureBuffer(SecureBuffer&& other) noexcept : data(std::move(other.data)) {}
+        SecureBuffer& operator=(SecureBuffer&& other) noexcept {
+            if (this != &other) {
+                if (!data.empty()) {
+                    secure_zero(data.data(), data.size());
+                }
+                data = std::move(other.data);
+            }
+            return *this;
+        }
+        SecureBuffer(const SecureBuffer&) = delete;
+        SecureBuffer& operator=(const SecureBuffer&) = delete;
+    };
+}
+
+bool crypto::validate_password_strength(const std::string& password) {
+    if (password.length() < 8) {
+        std::cerr << "Error: Password must be at least 8 characters long" << std::endl;
+        return false;
+    }
+
+    bool hasUpper = false, hasLower = false, hasDigit = false;
+    for (char c : password) {
+        if (std::isupper(c)) hasUpper = true;
+        if (std::islower(c)) hasLower = true;
+        if (std::isdigit(c)) hasDigit = true;
+    }
+
+    if (!hasUpper || !hasLower || !hasDigit) {
+        std::cout << "Warning: Weak password detected. Consider using uppercase, lowercase, and numbers for better security." << std::endl;
+    }
+
+    return true;
 }
 
 bool crypto::derive_key_from_password(const std::string& password, const byte_vec& salt, byte_vec& key) {
@@ -86,10 +153,20 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
         return false;
     }
 
-    byte_vec plaintext = read_file(input_path);
-    if (plaintext.empty() && !std::ifstream(input_path).is_open()) {
-        std::cerr << "Error: Could not read input file." << std::endl;
+    // Check if input file exists and can be opened
+    std::ifstream test_file(input_path, std::ios::binary);
+    if (!test_file) {
+        std::cerr << "Error: Could not open input file: " << input_path << std::endl;
         return false;
+    }
+    test_file.close();
+
+    SecureBuffer plaintext_buffer(read_file(input_path));
+    byte_vec& plaintext = plaintext_buffer.get();
+    
+    // Allow empty files to be encrypted
+    if (plaintext.empty()) {
+        std::cout << "Warning: Input file is empty, but will be encrypted anyway." << std::endl;
     }
 
     byte_vec salt(SALT_SIZE);
@@ -98,57 +175,38 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
         return false;
     }
 
-    byte_vec key;
+    SecureBuffer key_buffer;
+    byte_vec& key = key_buffer.get();
     if (!derive_key_from_password(password, salt, key)) {
         secure_zero(salt.data(), salt.size());
         return false;
     }
 
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    CipherContext ctx;
     if (!ctx) {
         handle_openssl_errors();
-        // FIXED: Added plaintext cleanup
-        secure_zero(plaintext.data(), plaintext.size());
-        secure_zero(key.data(), key.size());
         return false;
     }
 
     byte_vec iv(GCM_IV_SIZE);
-    // Cleanup and error handling for RAND_bytes failure
     if (RAND_bytes(iv.data(), iv.size()) != 1) {
         handle_openssl_errors();
-        EVP_CIPHER_CTX_free(ctx);
-        // FIXED: Added plaintext cleanup
-        secure_zero(plaintext.data(), plaintext.size());
-        secure_zero(key.data(), key.size());
         return false;
     }
 
     // 1. Initialize encryption operation.
-    if (1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL)) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (1 != EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_gcm(), NULL, NULL, NULL)) {
         handle_openssl_errors();
-        // FIXED: Added plaintext cleanup
-        secure_zero(plaintext.data(), plaintext.size());
-        secure_zero(key.data(), key.size());
         return false;
     }
     // 2. Set IV length.
-    if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, iv.size(), NULL)) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (1 != EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, iv.size(), NULL)) {
         handle_openssl_errors();
-        // FIXED: Added plaintext cleanup
-        secure_zero(plaintext.data(), plaintext.size());
-        secure_zero(key.data(), key.size());
         return false;
     }
     // 3. Provide key and IV.
-    if (1 != EVP_EncryptInit_ex(ctx, NULL, NULL, key.data(), iv.data())) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (1 != EVP_EncryptInit_ex(ctx.get(), NULL, NULL, key.data(), iv.data())) {
         handle_openssl_errors();
-        // FIXED: Added plaintext cleanup
-        secure_zero(plaintext.data(), plaintext.size());
-        secure_zero(key.data(), key.size());
         return false;
     }
 
@@ -156,23 +214,15 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
     byte_vec ciphertext(plaintext.size() + EVP_MAX_BLOCK_LENGTH);
     int len = 0;
     // 4. Encrypt plaintext.
-    if (1 != EVP_EncryptUpdate(ctx, ciphertext.data(), &len, plaintext.data(), plaintext.size())) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (1 != EVP_EncryptUpdate(ctx.get(), ciphertext.data(), &len, plaintext.data(), plaintext.size())) {
         handle_openssl_errors();
-        // FIXED: Added plaintext cleanup
-        secure_zero(plaintext.data(), plaintext.size());
-        secure_zero(key.data(), key.size());
         return false;
     }
     int ciphertext_len = len;
 
     // 5. Finalize encryption.
-    if (1 != EVP_EncryptFinal_ex(ctx, ciphertext.data() + len, &len)) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (1 != EVP_EncryptFinal_ex(ctx.get(), ciphertext.data() + len, &len)) {
         handle_openssl_errors();
-        // FIXED: Added plaintext cleanup
-        secure_zero(plaintext.data(), plaintext.size());
-        secure_zero(key.data(), key.size());
         return false;
     }
     ciphertext_len += len;
@@ -180,16 +230,10 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
 
     byte_vec tag(GCM_TAG_SIZE);
     // 6. Get the authentication tag.
-    if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, tag.size(), tag.data())) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (1 != EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG, tag.size(), tag.data())) {
         handle_openssl_errors();
-        // FIXED: Added plaintext cleanup
-        secure_zero(plaintext.data(), plaintext.size());
-        secure_zero(key.data(), key.size());
         return false;
     }
-
-    EVP_CIPHER_CTX_free(ctx);
 
     // 7. Assemble the output file: [salt][iv][tag][ciphertext]
     byte_vec output_data;
@@ -199,10 +243,10 @@ bool crypto::encrypt_file(const std::string& input_path, const std::string& outp
     output_data.insert(output_data.end(), tag.begin(), tag.end());
     output_data.insert(output_data.end(), ciphertext.begin(), ciphertext.end());
     
-    // FIXED: Added plaintext cleanup before finishing
-    secure_zero(plaintext.data(), plaintext.size());
-    secure_zero(key.data(), key.size());
+    // Clean up sensitive data
     secure_zero(salt.data(), salt.size());
+    secure_zero(iv.data(), iv.size());
+    secure_zero(ciphertext.data(), ciphertext.size());
     
     return write_file(output_path, output_data);
 }
@@ -213,14 +257,22 @@ bool crypto::decrypt_file(const std::string& input_path, const std::string& outp
         return false;
     }
 
+    // Check if input file exists
+    std::ifstream test_file(input_path, std::ios::binary);
+    if (!test_file) {
+        std::cerr << "Error: Could not open encrypted file: " << input_path << std::endl;
+        return false;
+    }
+    test_file.close();
+
     byte_vec encrypted_data = read_file(input_path);
     if (encrypted_data.empty()) {
-        std::cerr << "Error: Could not read encrypted file." << std::endl;
+        std::cerr << "Error: Encrypted file is empty or could not be read." << std::endl;
         return false;
     }
 
     if (encrypted_data.size() < (SALT_SIZE + GCM_IV_SIZE + GCM_TAG_SIZE)) {
-        std::cerr << "Error: File is corrupted or not properly encrypted." << std::endl;
+        std::cerr << "Error: File is corrupted or not properly encrypted (too small)." << std::endl;
         return false;
     }
 
@@ -234,78 +286,67 @@ bool crypto::decrypt_file(const std::string& input_path, const std::string& outp
     current += GCM_TAG_SIZE;
     byte_vec ciphertext(current, encrypted_data.end());
 
-    byte_vec key;
+    SecureBuffer key_buffer;
+    byte_vec& key = key_buffer.get();
     if (!derive_key_from_password(password, salt, key)) {
         secure_zero(salt.data(), salt.size());
         return false;
     }
 
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    CipherContext ctx;
     if (!ctx) {
         handle_openssl_errors();
-        secure_zero(key.data(), key.size());
         return false;
     }
 
     // 2. Initialize decryption.
-    if (1 != EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL)) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (1 != EVP_DecryptInit_ex(ctx.get(), EVP_aes_256_gcm(), NULL, NULL, NULL)) {
         handle_openssl_errors();
-        secure_zero(key.data(), key.size());
         return false;
     }
     // 3. Set IV length.
-    if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, iv.size(), NULL)) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (1 != EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, iv.size(), NULL)) {
         handle_openssl_errors();
-        secure_zero(key.data(), key.size());
         return false;
     }
     // 4. Provide key and IV.
-    if (1 != EVP_DecryptInit_ex(ctx, NULL, NULL, key.data(), iv.data())) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (1 != EVP_DecryptInit_ex(ctx.get(), NULL, NULL, key.data(), iv.data())) {
         handle_openssl_errors();
-        secure_zero(key.data(), key.size());
         return false;
     }
 
-    byte_vec plaintext(ciphertext.size());
+    SecureBuffer plaintext_buffer(ciphertext.size());
+    byte_vec& plaintext = plaintext_buffer.get();
     int len = 0;
     // 5. Decrypt ciphertext.
-    if (1 != EVP_DecryptUpdate(ctx, plaintext.data(), &len, ciphertext.data(), ciphertext.size())) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (1 != EVP_DecryptUpdate(ctx.get(), plaintext.data(), &len, ciphertext.data(), ciphertext.size())) {
         handle_openssl_errors();
-        secure_zero(key.data(), key.size());
         return false;
     }
     int plaintext_len = len;
 
     // 6. Set the expected authentication tag. THIS MUST BE DONE BEFORE FINALIZING.
-    if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, tag.size(), tag.data())) {
-        EVP_CIPHER_CTX_free(ctx);
+    if (1 != EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG, tag.size(), tag.data())) {
         handle_openssl_errors();
-        secure_zero(plaintext.data(), plaintext.size());
-        secure_zero(key.data(), key.size());
         return false;
     }
 
     // 7. Finalize decryption. This is the step that performs the authentication check.
     // If the tag does not match, this function will fail.
-    int result = EVP_DecryptFinal_ex(ctx, plaintext.data() + len, &len);
+    int result = EVP_DecryptFinal_ex(ctx.get(), plaintext.data() + len, &len);
     
-    EVP_CIPHER_CTX_free(ctx);
-
-    // After decryption is complete
-    secure_zero(key.data(), key.size());
+    // Clean up sensitive data
     secure_zero(salt.data(), salt.size());
+    secure_zero(iv.data(), iv.size());
+    secure_zero(ciphertext.data(), ciphertext.size());
     
     if (result > 0) {
         // Success! Authentication passed.
         plaintext_len += len;
         plaintext.resize(plaintext_len);
-        return write_file(output_path, plaintext);
+        bool write_success = write_file(output_path, plaintext);
+        return write_success;
     } else {
-        secure_zero(plaintext.data(), plaintext.size());
         // Failure! Authentication failed. This means the password was wrong OR the file was tampered with.
         std::cerr << "Error: Decryption failed. The password may be incorrect or the file is corrupt." << std::endl;
         handle_openssl_errors();
