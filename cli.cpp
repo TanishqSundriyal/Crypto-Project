@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <chrono>
 #include <fstream>
-#include "crypto.h"  // FIXED: Added missing include
+#include "crypto.h"
 
 #ifdef _WIN32
     #include <conio.h>
@@ -13,8 +13,6 @@
 #endif
 
 namespace fs = std::filesystem;
-
-// REMOVED: Forward declaration - no longer needed
 
 // ============================================================================
 // SECURE PASSWORD INPUT (Platform-specific)
@@ -66,6 +64,26 @@ std::string getPassword(const std::string& prompt) {
 }
 
 // ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+bool confirmOverwrite(const std::string& filepath) {
+    if (!fs::exists(filepath)) {
+        return true;  // File doesn't exist, no need to confirm
+    }
+
+    std::cout << "\nWarning: Output file already exists: " << filepath << std::endl;
+    std::cout << "Do you want to overwrite it? (y/n): ";
+    std::cout.flush();
+    
+    char response;
+    std::cin >> response;
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // Clear input buffer
+    
+    return (response == 'y' || response == 'Y');
+}
+
+// ============================================================================
 // ARGUMENT PARSER
 // ============================================================================
 
@@ -94,6 +112,12 @@ bool encryptCommand(const std::string& inputFile, const std::string& outputFile)
         return false;
     }
 
+    // Check if output file already exists and confirm overwrite
+    if (!confirmOverwrite(outputFile)) {
+        std::cout << "Operation cancelled by user." << std::endl;
+        return false;
+    }
+
     // Get password from user
     std::string password = getPassword("Enter encryption password: ");
     std::string confirm = getPassword("Confirm password: ");
@@ -105,8 +129,7 @@ bool encryptCommand(const std::string& inputFile, const std::string& outputFile)
     }
 
     // Validate password strength
-    if (password.length() < 8) {
-        std::cerr << "Error: Password must be at least 8 characters long" << std::endl;
+    if (!crypto::validate_password_strength(password)) {
         return false;
     }
 
@@ -114,7 +137,6 @@ bool encryptCommand(const std::string& inputFile, const std::string& outputFile)
     std::cout << "\n[*] Encrypting file..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    // FIXED: Changed from CryptographyEngine::encryptFile to crypto::encrypt_file
     if (!crypto::encrypt_file(inputFile, outputFile, password)) {
         std::cerr << "Encryption failed" << std::endl;
         return false;
@@ -149,6 +171,12 @@ bool decryptCommand(const std::string& inputFile, const std::string& outputFile)
         return false;
     }
 
+    // Check if output file already exists and confirm overwrite
+    if (!confirmOverwrite(outputFile)) {
+        std::cout << "Operation cancelled by user." << std::endl;
+        return false;
+    }
+
     // Get password from user
     std::string password = getPassword("Enter decryption password: ");
 
@@ -156,7 +184,6 @@ bool decryptCommand(const std::string& inputFile, const std::string& outputFile)
     std::cout << "\n[*] Decrypting file..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    // FIXED: Changed from CryptographyEngine::decryptFile to crypto::decrypt_file
     if (!crypto::decrypt_file(inputFile, outputFile, password)) {
         std::cerr << "Decryption failed" << std::endl;
         return false;
@@ -183,92 +210,162 @@ bool decryptCommand(const std::string& inputFile, const std::string& outputFile)
 // TEST COMMAND
 // ============================================================================
 
+void cleanupTestFiles() {
+    std::vector<std::string> cleanup_files = {
+        "test_text.txt", "test_text.txt.enc", "test_text.txt.dec",
+        "test_binary.bin", "test_binary.bin.enc", "test_binary.bin.dec",
+        "test_empty.txt", "test_empty.txt.enc", "test_empty.txt.dec",
+        "wrong_output.txt"
+    };
+    
+    for (const auto& file : cleanup_files) {
+        try {
+            if (fs::exists(file)) {
+                fs::remove(file);
+            }
+        } catch (...) {
+            // Ignore cleanup errors
+        }
+    }
+}
+
 bool testCommand() {
     std::cout << "\n========== CipherGuard Test Suite ==========" << std::endl;
 
     const std::string testPassword = "TestPassword123!";
 
-    // Test 1: Text file encryption/decryption
-    std::cout << "\n[Test 1] Text File Encryption/Decryption" << std::endl;
-    std::string testContent = "This is a secret message! !@#$%^&*()";
+    // Ensure cleanup at start
+    cleanupTestFiles();
 
-    // Create test file
-    std::ofstream testFile("test_text.txt");
-    testFile << testContent;
-    testFile.close();
-    std::cout << "  [*] Created test file (text)" << std::endl;
+    try {
+        // Test 1: Text file encryption/decryption
+        std::cout << "\n[Test 1] Text File Encryption/Decryption" << std::endl;
+        std::string testContent = "This is a secret message! !@#$%^&*()";
 
-    // Encrypt
-    // FIXED: Changed from CryptographyEngine::encryptFile to crypto::encrypt_file
-    if (!crypto::encrypt_file("test_text.txt", "test_text.txt.enc", testPassword)) {
-        std::cerr << "  [!] Encryption failed" << std::endl;
+        // Create test file
+        std::ofstream testFile("test_text.txt");
+        if (!testFile) {
+            std::cerr << "  [!] Failed to create test file" << std::endl;
+            cleanupTestFiles();
+            return false;
+        }
+        testFile << testContent;
+        testFile.close();
+        std::cout << "  [*] Created test file (text)" << std::endl;
+
+        // Encrypt
+        if (!crypto::encrypt_file("test_text.txt", "test_text.txt.enc", testPassword)) {
+            std::cerr << "  [!] Encryption failed" << std::endl;
+            cleanupTestFiles();
+            return false;
+        }
+        std::cout << "  [+] Encryption successful" << std::endl;
+
+        // Decrypt
+        if (!crypto::decrypt_file("test_text.txt.enc", "test_text.txt.dec", testPassword)) {
+            std::cerr << "  [!] Decryption failed" << std::endl;
+            cleanupTestFiles();
+            return false;
+        }
+        std::cout << "  [+] Decryption successful" << std::endl;
+
+        // Verify integrity
+        std::ifstream original("test_text.txt"), decrypted("test_text.txt.dec");
+        std::string origContent((std::istreambuf_iterator<char>(original)), std::istreambuf_iterator<char>());
+        std::string decContent((std::istreambuf_iterator<char>(decrypted)), std::istreambuf_iterator<char>());
+
+        if (origContent == decContent) {
+            std::cout << "  [+] Content verification PASSED" << std::endl;
+        } else {
+            std::cerr << "  [!] Content mismatch - FAILED" << std::endl;
+            cleanupTestFiles();
+            return false;
+        }
+
+        // Test 2: Binary file encryption/decryption
+        std::cout << "\n[Test 2] Binary File Encryption/Decryption" << std::endl;
+        unsigned char binaryData[] = {0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0xFD, 0xFC};
+
+        std::ofstream binaryFile("test_binary.bin", std::ios::binary);
+        if (!binaryFile) {
+            std::cerr << "  [!] Failed to create binary test file" << std::endl;
+            cleanupTestFiles();
+            return false;
+        }
+        binaryFile.write((char*)binaryData, sizeof(binaryData));
+        binaryFile.close();
+        std::cout << "  [*] Created test file (binary)" << std::endl;
+
+        if (!crypto::encrypt_file("test_binary.bin", "test_binary.bin.enc", testPassword)) {
+            std::cerr << "  [!] Encryption failed" << std::endl;
+            cleanupTestFiles();
+            return false;
+        }
+        std::cout << "  [+] Encryption successful" << std::endl;
+
+        if (!crypto::decrypt_file("test_binary.bin.enc", "test_binary.bin.dec", testPassword)) {
+            std::cerr << "  [!] Decryption failed" << std::endl;
+            cleanupTestFiles();
+            return false;
+        }
+        std::cout << "  [+] Decryption successful" << std::endl;
+
+        // Verify binary integrity
+        std::ifstream origBinary("test_binary.bin", std::ios::binary);
+        std::ifstream decBinary("test_binary.bin.dec", std::ios::binary);
+        std::vector<char> origBinData((std::istreambuf_iterator<char>(origBinary)), std::istreambuf_iterator<char>());
+        std::vector<char> decBinData((std::istreambuf_iterator<char>(decBinary)), std::istreambuf_iterator<char>());
+
+        if (origBinData == decBinData) {
+            std::cout << "  [+] Binary content verification PASSED" << std::endl;
+        } else {
+            std::cerr << "  [!] Binary content mismatch - FAILED" << std::endl;
+            cleanupTestFiles();
+            return false;
+        }
+
+        // Test 3: Empty file encryption/decryption
+        std::cout << "\n[Test 3] Empty File Encryption/Decryption" << std::endl;
+        std::ofstream emptyFile("test_empty.txt");
+        emptyFile.close();
+        std::cout << "  [*] Created empty test file" << std::endl;
+
+        if (!crypto::encrypt_file("test_empty.txt", "test_empty.txt.enc", testPassword)) {
+            std::cerr << "  [!] Empty file encryption failed" << std::endl;
+            cleanupTestFiles();
+            return false;
+        }
+        std::cout << "  [+] Empty file encryption successful" << std::endl;
+
+        if (!crypto::decrypt_file("test_empty.txt.enc", "test_empty.txt.dec", testPassword)) {
+            std::cerr << "  [!] Empty file decryption failed" << std::endl;
+            cleanupTestFiles();
+            return false;
+        }
+        std::cout << "  [+] Empty file decryption successful" << std::endl;
+
+        // Test 4: Wrong password detection
+        std::cout << "\n[Test 4] Wrong Password Detection" << std::endl;
+        if (crypto::decrypt_file("test_text.txt.enc", "wrong_output.txt", "WrongPassword123")) {
+            std::cerr << "  [!] Should have rejected wrong password" << std::endl;
+            cleanupTestFiles();
+            return false;
+        }
+        std::cout << "  [+] Correctly rejected wrong password" << std::endl;
+
+        // Cleanup test files
+        cleanupTestFiles();
+
+        std::cout << "\n========== All Tests PASSED ==========" << std::endl;
+        std::cout << "[+] CipherGuard is working correctly!\n" << std::endl;
+
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "\n[!] Test suite error: " << e.what() << std::endl;
+        cleanupTestFiles();
         return false;
     }
-    std::cout << "  [+] Encryption successful" << std::endl;
-
-    // Decrypt
-    // FIXED: Changed from CryptographyEngine::decryptFile to crypto::decrypt_file
-    if (!crypto::decrypt_file("test_text.txt.enc", "test_text.txt.dec", testPassword)) {
-        std::cerr << "  [!] Decryption failed" << std::endl;
-        return false;
-    }
-    std::cout << "  [+] Decryption successful" << std::endl;
-
-    // Verify integrity
-    std::ifstream original("test_text.txt"), decrypted("test_text.txt.dec");
-    std::string origContent((std::istreambuf_iterator<char>(original)), std::istreambuf_iterator<char>());
-    std::string decContent((std::istreambuf_iterator<char>(decrypted)), std::istreambuf_iterator<char>());
-
-    if (origContent == decContent) {
-        std::cout << "  [+] Content verification PASSED" << std::endl;
-    } else {
-        std::cerr << "  [!] Content mismatch - FAILED" << std::endl;
-        return false;
-    }
-
-    // Test 2: Binary file encryption/decryption
-    std::cout << "\n[Test 2] Binary File Encryption/Decryption" << std::endl;
-    unsigned char binaryData[] = {0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0xFD, 0xFC};
-
-    std::ofstream binaryFile("test_binary.bin", std::ios::binary);
-    binaryFile.write((char*)binaryData, sizeof(binaryData));
-    binaryFile.close();
-    std::cout << "  [*] Created test file (binary)" << std::endl;
-
-    // FIXED: Changed from CryptographyEngine to crypto namespace
-    if (!crypto::encrypt_file("test_binary.bin", "test_binary.bin.enc", testPassword)) {
-        std::cerr << "  [!] Encryption failed" << std::endl;
-        return false;
-    }
-    std::cout << "  [+] Encryption successful" << std::endl;
-
-    if (!crypto::decrypt_file("test_binary.bin.enc", "test_binary.bin.dec", testPassword)) {
-        std::cerr << "  [!] Decryption failed" << std::endl;
-        return false;
-    }
-    std::cout << "  [+] Decryption successful" << std::endl;
-
-    // Test 3: Wrong password detection
-    std::cout << "\n[Test 3] Wrong Password Detection" << std::endl;
-    // FIXED: Changed from CryptographyEngine to crypto namespace
-    if (crypto::decrypt_file("test_text.txt.enc", "wrong_output.txt", "WrongPassword123")) {
-        std::cerr << "  [!] Should have rejected wrong password" << std::endl;
-        return false;
-    }
-    std::cout << "  [+] Correctly rejected wrong password" << std::endl;
-
-    // Cleanup test files
-    fs::remove("test_text.txt");
-    fs::remove("test_text.txt.enc");
-    fs::remove("test_text.txt.dec");
-    fs::remove("test_binary.bin");
-    fs::remove("test_binary.bin.enc");
-    fs::remove("test_binary.bin.dec");
-
-    std::cout << "\n========== All Tests PASSED ==========" << std::endl;
-    std::cout << "[+] CipherGuard is working correctly!\n" << std::endl;
-
-    return true;
 }
 
 // ============================================================================
@@ -276,42 +373,54 @@ bool testCommand() {
 // ============================================================================
 
 int main(int argc, char* argv[]) {
-    // Parse command-line arguments
-    if (argc < 2) {
+    try {
+        // Parse command-line arguments
+        if (argc < 2) {
+            printUsage(argv[0]);
+            return 1;
+        }
+
+        std::string command = argv[1];
+
+        // Test command
+        if (command == "test") {
+            bool success = testCommand();
+            return success ? 0 : 1;
+        }
+
+        // Encrypt command
+        if (command == "encrypt") {
+            if (argc != 4) {
+                std::cerr << "Usage: " << argv[0] << " encrypt <input_file> <output_file>" << std::endl;
+                return 1;
+            }
+            bool success = encryptCommand(argv[2], argv[3]);
+            return success ? 0 : 1;
+        }
+
+        // Decrypt command
+        if (command == "decrypt") {
+            if (argc != 4) {
+                std::cerr << "Usage: " << argv[0] << " decrypt <input_file> <output_file>" << std::endl;
+                return 1;
+            }
+            bool success = decryptCommand(argv[2], argv[3]);
+            return success ? 0 : 1;
+        }
+
+        // Unknown command
+        std::cerr << "Error: Unknown command '" << command << "'" << std::endl;
         printUsage(argv[0]);
         return 1;
+        
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "Filesystem error: " << e.what() << std::endl;
+        return 1;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    } catch (...) {
+        std::cerr << "Unknown error occurred" << std::endl;
+        return 1;
     }
-
-    std::string command = argv[1];
-
-    // Test command
-    if (command == "test") {
-        bool success = testCommand();
-        return success ? 0 : 1;
-    }
-
-    // Encrypt command
-    if (command == "encrypt") {
-        if (argc != 4) {
-            std::cerr << "Usage: " << argv[0] << " encrypt <input_file> <output_file>" << std::endl;
-            return 1;
-        }
-        bool success = encryptCommand(argv[2], argv[3]);
-        return success ? 0 : 1;
-    }
-
-    // Decrypt command
-    if (command == "decrypt") {
-        if (argc != 4) {
-            std::cerr << "Usage: " << argv[0] << " decrypt <input_file> <output_file>" << std::endl;
-            return 1;
-        }
-        bool success = decryptCommand(argv[2], argv[3]);
-        return success ? 0 : 1;
-    }
-
-    // Unknown command
-    std::cerr << "Error: Unknown command '" << command << "'" << std::endl;
-    printUsage(argv[0]);
-    return 1;
 }
