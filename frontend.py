@@ -1,4 +1,4 @@
-import customtkinter as ctk
+import customtkinter as ctk # type: ignore
 from tkinter import filedialog, messagebox
 import os
 
@@ -143,7 +143,7 @@ def browse_file():
 # ------------------- UI Layout -------------------
 
 title = ctk.CTkLabel(app, text="🔒 Secure File Encryption & Decryption Tool", 
-                     font=("Segoe UI", 24, "bold"), text_color="#00b4d8")
+                    font=("Segoe UI", 24, "bold"), text_color="#00b4d8")
 title.pack(pady=30)
 
 frame = ctk.CTkFrame(app, corner_radius=15)
@@ -173,7 +173,8 @@ decrypt_btn = ctk.CTkButton(app, text="🔓 Decrypt File", width=220, height=40,
 decrypt_btn.pack(pady=10)
 
 footer = ctk.CTkLabel(app, text="Developed by Srishti Bhatt | Cryptography Project",
-                      font=("Segoe UI", 12), text_color="gray")
+                    font=("Segoe UI", 12), text_color="gray")
 footer.pack(side="bottom", pady=15)
 
 app.mainloop()
+
