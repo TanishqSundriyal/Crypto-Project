@@ -42,6 +42,13 @@ bool encrypt_file(const std::string& input_path, const std::string& output_path,
  */
 bool decrypt_file(const std::string& input_path, const std::string& output_path, const std::string& password);
 
+/**
+ * @brief Validates password strength
+ * @param password The password to validate
+ * @return True if password meets minimum requirements
+ */
+bool validate_password_strength(const std::string& password);
+
 } // namespace crypto
 
 #endif // CRYPTO_H
