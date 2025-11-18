@@ -281,7 +281,7 @@ decrypt_btn.pack(side="left", padx=10)
 
 # About button
 about_btn = ctk.CTkButton(app, text="ℹ️ About", width=120, height=30,
-                         fg_color="#6c757d", hover_color="#495057", command=show_about)
+                        fg_color="#6c757d", hover_color="#495057", command=show_about)
 about_btn.pack(pady=10)
 
 footer = ctk.CTkLabel(app, text="Developed by Srishti Bhatt | Cryptography Project | v2.0",
